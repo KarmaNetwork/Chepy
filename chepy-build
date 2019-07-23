@@ -1,0 +1,194 @@
+#!/usr/bin/python
+
+import toml
+import ninja_syntax as ns
+import os
+from os import path as pathmod
+import glob
+import json
+
+def parse_toml(path):
+    f = open(path + '/chest.toml')
+    r = toml.load(f)
+    return r
+
+def ninja(targets):
+    sourcedir = os.getcwd()
+    builddir = sourcedir + '/build'
+    if not pathmod.exists(builddir):
+        os.makedirs(builddir)
+
+    # build.ninja
+    build = ns.Writer(open(builddir + '/build.ninja', 'w+'))
+    build.variable( 'sourcedir', sourcedir )
+    build.variable( 'builddir', builddir )
+    build.newline()
+    for t1 in targets:
+        ninjapath = builddir + '/' + t1['name'] + '.ninja'
+        build.subninja( ninjapath )
+        # <target-name>.ninja
+        target_ninja(ninjapath, t1)
+
+def target_ninja(ninjapath, config):
+    targ = ns.Writer(open(ninjapath, 'w+'))
+    targ.variable('ccc', config['ccc'] )
+    targ.variable('cxx', config['cxx'] )
+    targ.variable('arc', config['arc'] )
+    targ.newline()
+
+    targ.rule('csrc',
+            '$ccc -fdiagnostics-color=always -MMD -MF $out.d -c $includedir -o $out $in',
+            depfile='$out.d')
+    targ.newline()
+
+    targ.rule('cxxsrc',
+            '$cxx -fdiagnostics-color=always -MMD -MF $out.d -c $includedir -o $out $in',
+            depfile='$out.d')
+    targ.newline()
+
+    targ.rule('link',
+            '$cxx -fdiagnostics-color=always -o $out $in $linkdir')
+    targ.newline()
+
+    targ.rule('static',
+            '$arc cr $out $in')
+    targ.newline()
+
+    path = os.getcwd()
+    l = _load_deps(path)
+
+    print(json.dumps(l, indent=4))
+
+    for k, v in l.items():
+        targ.include(v['ninja_dir'])
+        generate_ninja(v, l)
+
+
+def _load_deps(expath):
+    l = {}
+    buf = []
+    def _f(path):
+        obj = {}
+        config = parse_toml(path)
+        project = config['project']
+        key = project['domain'] + '/' + project['name']
+        obj['name'] = project['name']
+        obj['domain'] = project['domain']
+        obj['key'] = key
+        obj['source_dir'] = path
+
+        # binary_dir
+        binary_domain_dir = expath + '/build/objs/' + project['domain']
+        obj['binary_dir'] = binary_domain_dir + '/' + project['name']
+        if not pathmod.exists(binary_domain_dir):
+            os.makedirs(binary_domain_dir)
+
+        obj['static_dir'] = expath + '/build/statics/' + project['domain'] + '/' + project['name'] +'.a'
+
+        obj['execute_dir'] = expath + '/build/execute/' + project['domain'] + '/' + project['name']
+
+        # include_dir
+        include_domain_dir = expath + '/build/include/' + project['domain']
+        obj['include_dir'] = include_domain_dir + '/' + project['name']
+        obj['include_global_dir'] = expath + '/build/include'
+        if not pathmod.exists(include_domain_dir):
+            os.makedirs(include_domain_dir)
+        if pathmod.exists(obj['include_dir']):
+            os.remove(obj['include_dir'])
+        if pathmod.exists(path + '/src'):
+            os.symlink(path + '/src', obj['include_dir'])
+
+        ninja_domain_dir = expath + '/build/ninja/' + project['domain']
+        obj['ninja_dir'] = ninja_domain_dir + '/' + project['name'] + '.ninja'
+        if not pathmod.exists(ninja_domain_dir):
+            os.makedirs(ninja_domain_dir)
+        obj['link_obj'] = {}
+
+        l[key] = obj
+        buf.append(key)
+        for key in buf:
+            for k, v in config['dependencies'].items():
+                l[key]['link_obj'][k] = v
+
+        for k,v in config['dependencies'].items():
+            dpath = expath + '/dependencies/' + k
+            if v != 'system':
+                _f(dpath)
+        buf.pop()
+    _f(expath)
+    #  for k,v in l.items():
+    #      v['link_obj'] = list(v['link_obj'])
+    return l
+
+def generate_ninja(chest, l):
+    ninja = ns.Writer(open(chest['ninja_dir'], 'w+'))
+
+    # build file
+    ninja.comment("Build src's files")
+    objs = []
+
+    variables = {}
+    variables['includedir'] = '-I'+ chest['include_global_dir'] + ' -I' + chest['source_dir'] + '/src'
+    for name in glob.glob(chest['source_dir'] + '/src/**/*.c', recursive = True):
+        objpath = pathmod.relpath(name, start = chest['source_dir'] + '/src')
+        obj = chest['binary_dir'] + '/src/' + objpath + '.o'
+        ninja.build(obj, 'csrc' , name, variables = variables )
+        objs.append(obj)
+        ninja.newline()
+
+    for name in glob.glob(chest['source_dir'] + '/src/**/*.cpp', recursive = True):
+        objpath = pathmod.relpath(name, start = chest['source_dir'] + '/src')
+        obj = chest['binary_dir'] + '/src/' + objpath + '.o'
+        ninja.build(obj, 'cxxsrc' , name, variables = variables )
+        objs.append(obj)
+        ninja.newline()
+
+    ninja.newline()
+
+    ninja.comment("Link src's files as static file")
+    # link static
+    if len(objs) != 0:
+        ninja.build(chest['static_dir'], 'static', objs)
+    ninja.newline()
+    ninja.newline()
+
+    # link test
+    ninja.comment("Build test's files")
+    tests = []
+    for name in glob.glob(chest['source_dir'] + '/test/**/*.c', recursive = True):
+        objpath = pathmod.relpath(name, start = chest['source_dir'] + '/test')
+        obj = chest['binary_dir'] + '/test/' + objpath + '.o'
+        ninja.build(obj, 'csrc' , name, variables = variables )
+        tests.append(obj)
+        ninja.newline()
+
+    for name in glob.glob(chest['source_dir'] + '/test/**/*.cpp', recursive = True):
+        objpath = pathmod.relpath(name, start = chest['source_dir'] + '/test')
+        obj = chest['binary_dir'] + '/test/' + objpath + '.o'
+        ninja.build(obj, 'cxxsrc' , name, variables = variables )
+        tests.append(obj)
+        ninja.newline()
+
+    for test in tests:
+        objpath = pathmod.relpath(test, start = chest['binary_dir'] + '/test')
+        test_name = objpath.split('.')[0]
+        vin = [test]
+        variables = {}
+        variables['linkdir'] = ''
+        for k, v in chest['link_obj'].items():
+            if v == 'system':
+                variables['linkdir'] = variables['linkdir'] + '-l' + k +' '
+            else:
+                vin.append(l[k]['static_dir'])
+        ninja.build(chest['execute_dir'] + '/' + test_name, 'link', vin, variables = variables)
+
+    # link bin
+
+if __name__ == '__main__':
+    target = [{}]
+    target[0]['name'] = 'x86-linux64'
+    target[0]['ccc'] = 'gcc'
+    target[0]['cxx'] = 'g++'
+    target[0]['arc'] = 'ar'
+    ninja(target)
+

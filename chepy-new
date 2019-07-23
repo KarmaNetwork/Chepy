@@ -1,0 +1,118 @@
+#!/usr/bin/python
+import sys
+import toml
+
+def parse_toml():
+    f = open('./chest.toml')
+    r = toml.load(f)
+    return r
+
+def ctest(n):
+    config = parse_toml()
+    project = config['project']
+    name = project['name']
+    domain = project['domain']
+
+    cont = """#include <%s.h>
+
+int main() {
+    return 0;
+}
+    """
+
+    f = open('./src/' + n + '.c', 'w+')
+    f.write(cont % (n))
+
+def cfile(n):
+    config = parse_toml()
+    project = config['project']
+    name = project['name']
+    domain = project['domain']
+
+    cont = """#include <%s.h>
+    """
+
+    f = open('./src/' + n + '.c', 'w+')
+    f.write(cont % (n))
+
+def cxxfile(n):
+    config = parse_toml()
+    project = config['project']
+    name = project['name']
+    domain = project['domain']
+
+    cont = """#include <%s.h>
+
+namespace %s {
+
+}; // %s
+    """
+
+    f = open('./src/' + n + '.cpp', 'w+')
+    namespace = '%s_%s_NAMESPACE' % ( domain.upper(), name.upper() )
+    f.write(cont % ( n, namespace, namespace ))
+
+def cxxheader(n):
+    config = parse_toml()
+    project = config['project']
+    name = project['name']
+    name = name.replace('-','_')
+
+    domain = project['domain']
+    domain = domain.replace('.', '_')
+
+    cont = """#ifndef %s
+#define %s
+
+namespace %s {
+
+}; // %s
+
+#endif
+    """
+
+    f = open('./src/' + n + '.h', 'w+')
+    namespace = '%s_%s_NAMESPACE' % ( domain.upper(), name.upper() )
+    n.replace('/', '_')
+    macro = '%s_%s_%s_H' % ( domain.upper(), name.upper(), n.upper() )
+    f.write(cont % ( macro, macro, namespace, namespace ))
+
+def cxxconfig(n):
+    config = parse_toml()
+    project = config['project']
+    name = project['name']
+    name = name.replace('-','_')
+
+    domain = project['domain']
+    domain = domain.replace('.', '_')
+
+    cont = """#ifndef %s
+#define %s
+
+#define %s %s
+
+#endif
+    """
+
+    f = open('./src/config.h', 'w+')
+    namespace = '%s_%s_NAMESPACE' % ( domain.upper(), name.upper() )
+    n.replace('/', '_')
+    macro = '%s_%s_%s_H' % ( domain.upper(), name.upper(), n.upper() )
+    namespace_name = '%s_%s' % ( domain.upper(), name.upper() )
+    f.write(cont % ( macro, macro, namespace, namespace_name ))
+
+def new(t, name):
+    m = {}
+    m['C.SRC'] = cfile
+    m['C.TEST'] = ctest
+    m['CXX.SRC'] = cxxfile
+    m['CXX.HEADER'] = cxxheader
+    m['CXX.CONFIG'] = cxxconfig
+    func = m[t]
+    func(name)
+
+if __name__ == '__main__':
+    t = sys.argv[1].upper()
+    name = sys.argv[2].lower()
+    new(t, name)
+
